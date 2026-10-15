@@ -29,7 +29,9 @@ const last=['Carter','Bennett','Hayes','Morgan','Brooks','Parker','Reed','Turner
 let state={week:1,phase:'regular',playoffRound:0,playoffTeams:[],playoffMatchups:[],champion:null,draftRound:0,money:65,home:0,coach:{name:'Coach Riley',skill:'Clock Management',boost:2},news:['Welcome to the front office. Build a championship roster.']};
 let standings=teams.map((name,i)=>({name,w:0,l:0,ovr:70+(i*7)%23}));
 let rosters=teams.map((_,ti)=>Array.from({length:12},(_,i)=>makePlayer(positions[(i+ti)%positions.length],i+ti,ti)));
-let faCache=[],draftCache=[];
+let faCache=[],draftCache=[],draftProspects=[],draftPage=0;
+let draftPicks=teams.flatMap((name,ti)=>[1,2,3].map(round=>({owner:ti,original:ti,round,year:2027})));
+let incomingTrade=null;
 function rint(a,b){return Math.floor(Math.random()*(b-a+1))+a}
 function makePlayer(pos,seed=0,team=0){const ovr=Math.max(60,Math.min(96,67+(seed*11+team*3)%27));return{name:first[(seed+team)%first.length]+' '+last[(seed*3+team)%last.length],pos,ovr,speed:60+(seed*7+team)%37,power:60+(seed*5+team*2)%37,hands:60+(seed*9+team)%37,skill:skills[(seed+team)%skills.length],salary:Math.max(1,Math.round(ovr/12))}}
 function teamRating(i){const arr=rosters[i]||[];return Math.round(arr.reduce((a,p)=>a+p.ovr,0)/Math.max(1,arr.length)+state.coach.boost)}
@@ -41,18 +43,101 @@ function renderDashboard(){const t=teams[state.home];let opponentText='';if(stat
 function renderRoster(){$('teamTitle').textContent=teams[state.home];$('roster').innerHTML=rosters[state.home].map((p,i)=>`<div class="panel card"><h3>${p.name} <span class="gold">${p.ovr}</span></h3><div class="muted">${p.pos} • ${p.skill}</div><p>SPD ${p.speed} • POW ${p.power} • HND ${p.hands}</p><div class="bar"><i style="width:${p.ovr}%"></i></div><p class="muted">$${p.salary}M / yr</p><button class="small" data-upgrade="${i}">Develop +1 OVR ($2M)</button></div>`).join('')}
 function renderLeague(){const sorted=[...standings].sort((a,b)=>b.w-a.w||a.l-b.l||b.ovr-a.ovr);$('standings').innerHTML='<tr><th>#</th><th>TEAM</th><th>OVR</th><th>W</th><th>L</th></tr>'+sorted.map((t,i)=>`<tr><td>${i+1}</td><td>${t.name}</td><td>${t.ovr}</td><td>${t.w}</td><td>${t.l}</td></tr>`).join('');if(state.phase==='playoffs')$('schedule').innerHTML=`<div class="news"><b>${phaseLabel()}</b></div>`+state.playoffMatchups.map(m=>`<div class="row"><span>${teams[m[0]]}</span><b>vs ${teams[m[1]]}</b></div>`).join('');else $('schedule').innerHTML=teams.slice(0,15).map((t,i)=>`<div class="row"><span>W${Math.min(18,state.week)} • ${t}</span><b>${i%2?'@':'vs'} ${teams[(i+5)%30]}</b></div>`).join('')}
 function simulateWeek(){if(state.phase==='regular'){simulateRegularWeek();return}if(state.phase==='playoffs'){simulatePlayoffGame();return}if(state.phase==='offseason'){enterDraft();return}toast('Draft is already in progress.');}
-function simulateRegularWeek(){const opp=(state.home+state.week+3)%30,a=teamRating(state.home),b=teamRating(opp),diff=a-b,base=17,me=Math.max(3,Math.round(base+diff/3+rint(-7,7))),them=Math.max(3,Math.round(base-diff/3+rint(-7,7)));if(me===them){standings[state.home].w++;standings[opp].w++}else if(me>them){standings[state.home].w++;standings[opp].l++}else{standings[state.home].l++;standings[opp].w++}for(let i=0;i<30;i++){if(i!==state.home&&i!==opp&&Math.random()<.6){if(Math.random()<.5)standings[i].w++;else standings[i].l++}}state.news.push(`${teams[state.home]} ${me}, ${teams[opp]} ${them} — Week ${state.week} simulated.`);state.week++;if(state.week>18)startPlayoffs();renderAll();toast(state.phase==='playoffs'?'REGULAR SEASON COMPLETE • PLAYOFFS START':'WEEK COMPLETE')}
+function simulateRegularWeek(){const opp=(state.home+state.week+3)%30,a=teamRating(state.home),b=teamRating(opp),diff=a-b,base=17,me=Math.max(3,Math.round(base+diff/3+rint(-7,7))),them=Math.max(3,Math.round(base-diff/3+rint(-7,7)));if(me===them){standings[state.home].w++;standings[opp].w++}else if(me>them){standings[state.home].w++;standings[opp].l++}else{standings[state.home].l++;standings[opp].w++}for(let i=0;i<30;i++){if(i!==state.home&&i!==opp&&Math.random()<.6){if(Math.random()<.5)standings[i].w++;else standings[i].l++}}state.news.push(`${teams[state.home]} ${me}, ${teams[opp]} ${them} — Week ${state.week} simulated.`);state.week++;if(state.week>18)startPlayoffs();renderAll();toast(state.phase==='playoffs'?'REGULAR SEASON COMPLETE • PLAYOFFS START':'WEEK COMPLETE');maybeIncomingTrade()}
 function startPlayoffs(){const top=[...standings.map((t,i)=>({...t,i}))].sort((a,b)=>b.w-a.w||b.ovr-a.ovr).slice(0,8).map(t=>t.i);state.phase='playoffs';state.playoffRound=1;state.playoffTeams=top;state.playoffMatchups=[[top[0],top[7]],[top[1],top[6]],[top[2],top[5]],[top[3],top[4]]];state.news.push('The 18-week regular season is over. The top 8 teams made the playoffs.');}
-function simulatePlayoffGame(){if(!state.playoffMatchups.length){return}const match=state.playoffMatchups[0];const a=match[0],b=match[1];const ra=teamRating(a),rb=teamRating(b);const winner=ra+ rint(-10,10)>=rb+rint(-10,10)?a:b;const loser=winner===a?b:a;state.news.push(`${teams[winner]} defeated ${teams[loser]} in the ${phaseLabel().toLowerCase()}.`);state.playoffMatchups.shift();state.playoffTeams=state.playoffTeams.filter(i=>i!==loser);if(state.playoffMatchups.length===0){if(state.playoffRound===1){state.playoffRound=2;const q=[...state.playoffTeams];state.playoffMatchups=[[q[0],q[1]],[q[2],q[3]]]}else if(state.playoffRound===2){state.playoffRound=3;const q=[...state.playoffTeams];state.playoffMatchups=[[q[0],q[1]]]}else{state.champion=winner;state.phase='offseason';state.playoffRound=0;state.news.push(`${teams[winner]} won the championship! Enter the draft to begin the next season.`)}}renderAll();toast(state.phase==='offseason'?'CHAMPIONSHIP COMPLETE':'PLAYOFF GAME COMPLETE')}
-function enterDraft(){if(state.phase!=='offseason'){toast('The draft is only available after the playoffs.');return}state.phase='draft';state.draftRound=0;draft();renderAll()}
+function simulatePlayoffGame(){if(!state.playoffMatchups.length){return}const match=state.playoffMatchups[0];const a=match[0],b=match[1];const ra=teamRating(a),rb=teamRating(b);const winner=ra+ rint(-10,10)>=rb+rint(-10,10)?a:b;const loser=winner===a?b:a;state.news.push(`${teams[winner]} defeated ${teams[loser]} in the ${phaseLabel().toLowerCase()}.`);state.playoffMatchups.shift();state.playoffTeams=state.playoffTeams.filter(i=>i!==loser);if(state.playoffMatchups.length===0){if(state.playoffRound===1){state.playoffRound=2;const q=[...state.playoffTeams];state.playoffMatchups=[[q[0],q[1]],[q[2],q[3]]]}else if(state.playoffRound===2){state.playoffRound=3;const q=[...state.playoffTeams];state.playoffMatchups=[[q[0],q[1]]]}else{state.champion=winner;state.phase='offseason';state.playoffRound=0;state.news.push(`${teams[winner]} won the championship! Enter the draft to begin the next season.`)}}renderAll();toast(state.phase==='offseason'?'CHAMPIONSHIP COMPLETE':'PLAYOFF GAME COMPLETE');maybeIncomingTrade()}
+function enterDraft(){if(state.phase!=='offseason'){toast('The draft is only available after the playoffs.');return}state.phase='draft';state.draftRound=0;draftPage=0;draftProspects=Array.from({length:60},(_,i)=>makePlayer(positions[rint(0,6)],i+35,state.home)).map((p,i)=>({...p,id:i+1})).sort((a,b)=>b.ovr-a.ovr||a.name.localeCompare(b.name));state.news.push('Draft class revealed: 60 prospects, ranked by overall rating.');draft();renderAll()}
 function upgrade(i){if(state.money<2){toast('Not enough budget.');return}const p=rosters[state.home][i];p.ovr=Math.min(99,p.ovr+1);p.speed=Math.min(99,p.speed+1);state.money-=2;state.news.push(`${p.name} improved to ${p.ovr} OVR.`);renderAll();toast(`${p.name} developed +1 OVR`)}
 function freeAgency(){faCache=Array.from({length:6},(_,i)=>makePlayer(positions[rint(0,6)],i+8,state.home));modal('FREE AGENCY',faCache.map((p,i)=>`<div class="row"><div><b>${p.name}</b> <span class="gold">${p.ovr}</span><br><span class="muted">${p.pos} • ${p.skill} • $${p.salary}M</span></div><button data-sign="${i}">SIGN</button></div>`).join(''));document.querySelectorAll('[data-sign]').forEach(b=>b.onclick=()=>signFA(+b.dataset.sign))}
 function signFA(i){const p=faCache[i];if(!p)return;if(state.money<p.salary){toast('Not enough budget.');return}state.money-=p.salary;rosters[state.home].push(p);state.news.push(`${p.name} signed in free agency.`);closeModal();renderAll();toast('Free agent signed.')}
-function draft(){if(state.phase!=='draft'){toast('Draft opens only after the 18-week season and playoffs.');return}if(state.draftRound>=3){return}const round=state.draftRound+1;const p=makePlayer(positions[rint(0,6)],round+18+state.home,state.home);draftCache=[p];modal(`THREE-ROUND DRAFT • ROUND ${round}`,`<div class="row"><div><b>${p.name}</b> <span class="gold">${p.ovr}</span><br><span class="muted">${p.pos} • ${p.skill} • SPD ${p.speed} • HND ${p.hands}</span></div><button data-pick="0">DRAFT PLAYER</button></div>`);document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>draftPick(0))}
-function draftPick(i){const p=draftCache[i];if(!p)return;rosters[state.home].push(p);state.news.push(`Drafted ${p.name} (${p.ovr} OVR) in Round ${state.draftRound+1}.`);state.draftRound++;draftCache=[];closeModal();if(state.draftRound>=3){state.phase='regular';state.week=1;state.playoffTeams=[];state.playoffMatchups=[];state.champion=null;state.draftRound=0;standings=standings.map(t=>({...t,w:0,l:0}));state.news.push('Draft complete. A new 18-week season begins.');renderAll();toast('DRAFT COMPLETE • NEW SEASON')}else{renderAll();setTimeout(draft,120);toast(`ROUND ${state.draftRound} COMPLETE`)}}
-function trade(){const target=(state.home+2)%30;const p=rosters[target][0];modal('TRADE CENTER',`<div class="news">${teams[target]} are listening on <b>${p.name}</b> (${p.pos}, ${p.ovr} OVR).</div><div class="row"><span>Offer your 2nd-round pick</span><button id="tradeOffer">OFFER</button></div>`);$('tradeOffer').onclick=()=>{rosters[state.home].push({...p,salary:p.salary});rosters[target].shift();state.news.push(`Trade completed with ${teams[target]} for ${p.name}.`);closeModal();renderAll();toast('Trade completed.')}}
+function draft(){
+ if(state.phase!=='draft'){toast('Draft opens only after the 18-week season and playoffs.');return}
+ if(state.draftRound>=3)return;
+ const pageSize=10,totalPages=Math.max(1,Math.ceil(draftProspects.length/pageSize));
+ draftPage=Math.max(0,Math.min(draftPage,totalPages-1));
+ const start=draftPage*pageSize,shown=draftProspects.slice(start,start+pageSize);
+ const round=state.draftRound+1;
+ const rows=shown.map((p,i)=>`<div class="row" style="gap:12px;align-items:center"><div style="min-width:0;flex:1"><b>${p.name}</b> <span class="gold">${p.ovr} OVR</span><br><span class="muted">${p.pos} • ${p.skill} • SPD ${p.speed} • POW ${p.power} • HND ${p.hands}</span></div><button data-pick="${start+i}">DRAFT</button></div>`).join('');
+ modal(`DRAFT • ROUND ${round} OF 3`,
+ `<div class="news">60-player draft class • Sorted highest to lowest OVR • Pick ${round} of 3</div>
+ <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:12px 0">
+ <button id="draftPrev" ${draftPage===0?'disabled':''}>← PREVIOUS</button>
+ <b>PAGE ${draftPage+1} / ${totalPages}</b>
+ <button id="draftNext" ${draftPage>=totalPages-1?'disabled':''}>NEXT →</button>
+ </div>
+ ${rows||'<p class="muted">No prospects remain.</p>'}
+ <p class="muted">Showing ${start+1}–${Math.min(start+pageSize,draftProspects.length)} of ${draftProspects.length} available prospects.</p>`);
+ $('draftPrev').onclick=()=>{draftPage--;draft()};
+ $('draftNext').onclick=()=>{draftPage++;draft()};
+ document.querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>draftPick(+b.dataset.pick));
+}
+function draftPick(index){
+ const p=draftProspects[index];if(!p)return;
+ rosters[state.home].push({name:p.name,pos:p.pos,ovr:p.ovr,speed:p.speed,power:p.power,hands:p.hands,skill:p.skill,salary:p.salary});
+ state.news.push(`Drafted ${p.name} (${p.ovr} OVR) in Round ${state.draftRound+1}.`);
+ draftProspects.splice(index,1);state.draftRound++;draftCache=[];
+ closeModal();
+ if(state.draftRound>=3){
+  state.phase='regular';state.week=1;state.playoffTeams=[];state.playoffMatchups=[];state.champion=null;state.draftRound=0;draftProspects=[];draftPage=0;
+  standings=standings.map(t=>({...t,w:0,l:0}));state.news.push('Draft complete. A new 18-week season begins.');renderAll();toast('DRAFT COMPLETE • NEW SEASON');
+ }else{
+  draftPage=Math.min(draftPage,Math.max(0,Math.ceil(draftProspects.length/10)-1));renderAll();draft();toast(`ROUND ${state.draftRound} COMPLETE`);
+ }
+}
+function pickLabel(p){return `${teams[p.original]} ${p.year} Round ${p.round} Pick`}
+function tradeAssets(teamIndex){
+ const players=rosters[teamIndex].map((p,i)=>({kind:'player',index:i,label:`${p.name} (${p.pos}, ${p.ovr} OVR)`,value:p.ovr}));
+ const picks=draftPicks.map((p,i)=>({...p,index:i})).filter(p=>p.owner===teamIndex).map(p=>({kind:'pick',index:p.index,label:pickLabel(p),value:90-p.round*12}));
+ return [...players,...picks];
+}
+function tradeSelectOptions(assets){return assets.map((a,i)=>`<option value="${i}">${a.label}</option>`).join('')}
+function trade(){
+ const opponents=teams.map((name,i)=>({name,i})).filter(t=>t.i!==state.home);
+ modal('TRADE CENTER',`<div class="news"><b>PROPOSE A TRADE</b><br>Offer one of your players or draft picks for one asset from another team. The other team can reject the deal.</div>
+ <label>TRADE WITH</label><select id="tradeTeam" style="display:block;width:100%;margin:6px 0 12px;padding:10px;background:#102634;color:#fff;border:1px solid #31566b">${opponents.map(t=>`<option value="${t.i}">${t.name}</option>`).join('')}</select>
+ <label>YOU GIVE</label><select id="tradeGive" style="display:block;width:100%;margin:6px 0 12px;padding:10px;background:#102634;color:#fff;border:1px solid #31566b"></select>
+ <label>YOU RECEIVE</label><select id="tradeGet" style="display:block;width:100%;margin:6px 0 12px;padding:10px;background:#102634;color:#fff;border:1px solid #31566b"></select>
+ <div id="tradePreview" class="muted" style="margin:10px 0"></div><button id="proposeTrade">SEND TRADE OFFER</button>`);
+ const refresh=()=>{const ti=+$('tradeTeam').value;const mine=tradeAssets(state.home),theirs=tradeAssets(ti);$('tradeGive').innerHTML=tradeSelectOptions(mine);$('tradeGet').innerHTML=tradeSelectOptions(theirs);$('tradePreview').textContent=`${teams[state.home]} gives ${mine[0]?.label||'nothing'} for ${theirs[0]?.label||'nothing'} from ${teams[ti]}.`;};
+ $('tradeTeam').onchange=refresh;refresh();
+ $('tradeGive').onchange=()=>{$('tradePreview').textContent=`${teams[state.home]} gives ${tradeAssets(state.home)[+$('tradeGive').value]?.label||'nothing'} for ${tradeAssets(+$('tradeTeam').value)[+$('tradeGet').value]?.label||'nothing'} from ${teams[+$('tradeTeam').value]}.`};
+ $('tradeGet').onchange=()=>{$('tradePreview').textContent=`${teams[state.home]} gives ${tradeAssets(state.home)[+$('tradeGive').value]?.label||'nothing'} for ${tradeAssets(+$('tradeTeam').value)[+$('tradeGet').value]?.label||'nothing'} from ${teams[+$('tradeTeam').value]}.`};
+ $('proposeTrade').onclick=()=>{const ti=+$('tradeTeam').value;const mine=tradeAssets(state.home),theirs=tradeAssets(ti);const give=mine[+$('tradeGive').value],get=theirs[+$('tradeGet').value];if(!give||!get){toast('Both teams need an available player or pick.');return}closeModal();resolveTrade(state.home,ti,give,get,false)};
+}
+function transferAsset(from,to,asset){
+ if(asset.kind==='player'){const player=rosters[from].splice(asset.index,1)[0];if(player)rosters[to].push(player)}
+ else{const pick=draftPicks[asset.index];if(pick&&pick.owner===from)pick.owner=to}
+}
+function resolveTrade(from,to,give,get,incoming){
+ // Rebuild current indexes to ensure an asset has not gone stale.
+ const giveNow=tradeAssets(from).find(a=>a.kind===give.kind&&(give.kind==='player'?a.index===give.index:a.index===give.index));
+ const getNow=tradeAssets(to).find(a=>a.kind===get.kind&&(get.kind==='player'?a.index===get.index:a.index===get.index));
+ if(!giveNow||!getNow){toast('That asset is no longer available.');return}
+ const gap=getNow.value-giveNow.value;
+ const accepts=incoming ? gap<=18 : (gap<=8 && Math.random()<0.72);
+ if(!accepts){state.news.push(`${teams[to]} rejected the trade offer for ${getNow.label}.`);renderAll();modal('TRADE REJECTED',`<div class="news"><b>${teams[to]} rejected your offer.</b></div><p>You offered <b>${giveNow.label}</b> for <b>${getNow.label}</b>.</p><p class="muted">No players or draft picks changed teams.</p><button id="tradeResultClose">BACK TO FRANCHISE</button>`);$('tradeResultClose').onclick=closeModal;return}
+ // Remove each asset using its current index, then add it to the other club.
+ if(giveNow.kind==='player'){const p=rosters[from].splice(giveNow.index,1)[0];rosters[to].push(p)}else draftPicks[giveNow.index].owner=to;
+ // Re-find the target asset after the first transfer, since array indexes may shift.
+ if(getNow.kind==='player'){
+  const idx=rosters[to].findIndex(p=>p===undefined);
+  const targetIndex=getNow.index;
+  const p=rosters[to].splice(targetIndex,1)[0];if(p)rosters[from].push(p);
+ }else{draftPicks[getNow.index].owner=from}
+ state.news.push(`TRADE COMPLETE: ${teams[from]} and ${teams[to]} exchanged ${giveNow.label} for ${getNow.label}.`);renderAll();modal('TRADE COMPLETED',`<div class="news"><b>TRADE ACCEPTED!</b><br>${teams[from]} and ${teams[to]} have completed a deal.</div><div class="panel" style="padding:12px;margin:10px 0"><div class="muted">${teams[from]} RECEIVES</div><b>${getNow.label}</b></div><div class="panel" style="padding:12px;margin:10px 0"><div class="muted">${teams[to]} RECEIVES</div><b>${giveNow.label}</b></div><button id="tradeResultClose">BACK TO FRANCHISE</button>`);$('tradeResultClose').onclick=closeModal;
+}
+function maybeIncomingTrade(){
+ if(state.phase==='draft'||state.phase==='offseason'||incomingTrade||Math.random()>.28)return;
+ const other=teams.map((_,i)=>i).filter(i=>i!==state.home)[rint(0,28)];const mine=tradeAssets(state.home),theirs=tradeAssets(other);if(!mine.length||!theirs.length)return;
+ const give=mine[rint(0,mine.length-1)],get=theirs[rint(0,theirs.length-1)];
+ // Only present a plausible AI offer; offers can still be declined by the user.
+ if(get.value>give.value+20)return;
+ incomingTrade={other,give:{kind:give.kind,index:give.index},get:{kind:get.kind,index:get.index},giveLabel:give.label,getLabel:get.label};
+ showIncomingTrade();
+}
+function showIncomingTrade(){if(!incomingTrade)return;const o=incomingTrade;modal('INCOMING TRADE OFFER',`<div class="news"><b>${teams[o.other]} want to make a deal.</b><br>They offer <b>${o.getLabel}</b><br>They want your <b>${o.giveLabel}</b>.</div><p class="muted">Accept to exchange the assets, or decline to keep your roster and picks unchanged.</p><button id="acceptIncoming">ACCEPT TRADE</button> <button id="declineIncoming">DECLINE</button>`);$('acceptIncoming').onclick=()=>{const offer=incomingTrade;incomingTrade=null;closeModal();resolveTrade(state.home,offer.other,offer.give,offer.get,true)};$('declineIncoming').onclick=()=>{state.news.push(`Declined a trade offer from ${teams[o.other]}.`);incomingTrade=null;closeModal();renderAll();toast('TRADE DECLINED')}}
 function hireCoach(){const coaches=[['Coach Riley','Clock Management',3],['Coach Vega','Route Precision',4],['Coach Knox','Run Blocking',4],['Coach Stone','Turnover Defense',3]];modal('COACHING MARKET',coaches.map((c,i)=>`<div class="row"><div><b>${c[0]}</b><br><span class="muted">${c[1]} • +${c[2]} impact</span></div><button data-coach="${i}">HIRE ($5M)</button></div>`).join(''));document.querySelectorAll('[data-coach]').forEach(b=>b.onclick=()=>{const c=coaches[+b.dataset.coach];if(state.money<5){toast('Not enough budget.');return}state.money-=5;state.coach={name:c[0],skill:c[1],boost:c[2]};state.news.push(`${c[0]} hired as head coach.`);closeModal();renderAll();toast('Coach hired.')})}
-function renderAll(){renderDashboard();renderRoster();renderLeague();const canDraft=state.phase==='offseason'||state.phase==='draft';$('draftBtn').disabled=!canDraft;$('draftBtn').textContent=state.phase==='draft'?'DRAFT IN PROGRESS':'Enter Draft';$('draftStatus').textContent=state.phase==='regular'?'Locked until after Week 18 + playoffs.':state.phase==='playoffs'?'Locked until the championship is finished.':state.phase==='offseason'?'Season complete — enter the draft to begin the next offseason.':'Draft is open.'}
+function renderAll(){renderDashboard();renderRoster();renderLeague();const canDraft=state.phase==='offseason'||state.phase==='draft';$('draftBtn').disabled=!canDraft;$('draftBtn').textContent=state.phase==='draft'?'DRAFT IN PROGRESS':'Enter Draft';$('draftStatus').textContent=state.phase==='regular'?'Locked until after Week 18 + playoffs.':state.phase==='playoffs'?'Locked until the championship is finished.':state.phase==='offseason'?'Season complete — enter the draft to begin.':`Draft is open • ${draftProspects.length} prospects left.`}
 document.querySelectorAll('.tab').forEach(tab=>tab.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));tab.classList.add('active');$(tab.dataset.view).classList.add('active')}));
 $('simulateBtn').onclick=simulateWeek;$('faBtn').onclick=freeAgency;$('draftBtn').onclick=()=>state.phase==='offseason'?enterDraft():draft();$('tradeBtn').onclick=trade;$('coachBtn').onclick=hireCoach;
 $('roster').addEventListener('click',e=>{const b=e.target.closest('[data-upgrade]');if(b)upgrade(+b.dataset.upgrade)});$('modal').addEventListener('click',e=>{if(e.target.id==='modal')closeModal()});
